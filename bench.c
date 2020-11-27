@@ -5,7 +5,6 @@
 #include <getopt.h>
 #include <dpu.h>
 #include "bench.h"
-#include "PIM-common/common/include/common.h"
 #include "PIM-common/host/include/host.h"
 
 #define GIGA ((double)(1 << 30))
@@ -15,7 +14,7 @@ static struct option options[] =
 	{ 0, no_argument, 0, 0 }
 };
 
-typedef int(*testfn_ptr)(void);
+typedef int(*testfn_ptr)(struct dpu_set_t dpus);
 typedef struct test_entry
 {
 	char name[32];
@@ -30,23 +29,15 @@ my_clock()
     return (1.0e-9 * t.tv_nsec + t.tv_sec);
 }
 
-int test_throughput(void)
+int test_throughput(struct dpu_set_t dpus)
 {
 	uint32_t dpus_to_test;
-	struct dpu_set_t dpus;
 	uint32_t dpu_count, rank_count, dpus_per_rank;
 	uint32_t size_per_dpu;
   	struct dpu_symbol_t symbol;
 	symbol.address = 0x8000000; // MRAM start address
 
 	printf("size,dpus,transfers,time(s),rate(GB/s)\n");
-
-	int status = dpu_alloc(DPU_ALLOCATE_ALL, NULL, &dpus);
-	if (status != DPU_OK)
-	{
-		fprintf(stderr, "Error %i allocating DPUs\n", status);
-		return -3;
-	}
 
 	dpu_get_nr_ranks(dpus, &rank_count);
 	dpu_get_nr_dpus(dpus, &dpu_count);
@@ -79,24 +70,19 @@ int test_throughput(void)
 		free(buffer);
 	}
 
-	DPU_ASSERT(dpu_free(dpus));
 	return 0;
 }
 
-int test_incr(void)
+int test_incr(struct dpu_set_t dpus)
 {
 	struct timespec start,stop;
 	//uint32_t dpu_cycles;
-	struct dpu_set_t dpus;
+	//struct dpu_set_t dpu_rank;
+	struct dpu_set_t dpu;
 	double frequency = 800  * 1000000 / 3;
 	uint32_t rank_count, dpu_count, dpus_per_rank;
-
-	int status = dpu_alloc(DPU_ALLOCATE_ALL, NULL, &dpus);
-	if (status != DPU_OK)
-	{
-		fprintf(stderr, "Error %i allocating DPUs\n", status);
-		return -3;
-	}
+	block_t blocks[NR_TASKLETS];
+	uint32_t results[NR_TASKLETS];
 
 	dpu_get_nr_ranks(dpus, &rank_count);
 	dpu_get_nr_dpus(dpus, &dpu_count);
@@ -108,15 +94,43 @@ int test_incr(void)
 	printf("%u DPUs at %g MHz with %u tasklets\n", dpu_count, frequency / 1000000, NR_TASKLETS);
 	printf("size,DPUs,time(s),rate(MB/s)\n");
 
+	for (uint32_t tasklet=0; tasklet < NR_TASKLETS; tasklet++)
+	{
+		blocks[tasklet].start = (SIZE_PER_DPU / NR_TASKLETS) * tasklet;
+		blocks[tasklet].end = blocks[tasklet].start + (SIZE_PER_DPU / NR_TASKLETS) - 1;
+		//printf("tasklet %i start=0x%x end=0x%x\n", tasklet, blocks[tasklet].start, blocks[tasklet].end);
+	}
+	printf("Total size per DPU: %u\n", blocks[NR_TASKLETS-1].end - blocks[0].start);
+
+	uint64_t total_bytes = 0;
 	//for (uint32_t dpus_to_test=1; dpus_to_test <= dpu_count; dpus_to_test++)
 	{
 		clock_gettime(CLOCK_MONOTONIC, &start);
+		dpu_copy_to(dpus, "blocks", 0, &blocks, sizeof(blocks));
+		printf("host: launching\n");
 		DPU_ASSERT(dpu_launch(dpus, DPU_SYNCHRONOUS));
+
+		// add up the total bytes processed
+		DPU_FOREACH(dpus, dpu)
+		{
+			dpu_copy_from(dpu, "results", 0, &results, sizeof(results));
+			for (uint32_t tasklet=0; tasklet < NR_TASKLETS; tasklet++)
+				total_bytes = results[tasklet];
+
+			// get any DPU debug messages
+			int err = dpu_log_read(dpu, stdout);
+			if (err != DPU_OK)
+			{
+				dbg_printf("Error %u retrieving log\n", err);
+			}
+		}
+
 		clock_gettime(CLOCK_MONOTONIC, &stop);
 
+
+		printf("Total bytes processed: %lu\n", total_bytes);
 /*
 		double max_time = 0;
-		unsigned long int total_bytes = 0;
 		DPU_FOREACH (dpu_set, dpu)
 		{
 			dpu_cycles = 0;
@@ -139,6 +153,7 @@ int test_incr(void)
 		unsigned long total_mb = total_bytes / (1024 * 1024);
 		printf("Total count: %lu\n", total_mb);
 */
+
 		double rank_time = TIME_DIFFERENCE(start, stop);
 		printf("Rank processed in %2.2f s\n", rank_time);
 	}
@@ -162,6 +177,7 @@ int main(int argc, char** argv)
 {
 	char *test_name;
 	int c;
+	struct dpu_set_t dpus;
 
 	// read any command-line options
 	while (1)
@@ -182,14 +198,25 @@ int main(int argc, char** argv)
 
 	fprintf(stderr, "Got test name: %s\n", test_name);
 
+	// allocate the DPUs
+	int status = dpu_alloc(DPU_ALLOCATE_ALL, NULL, &dpus);
+	if (status != DPU_OK)
+	{
+		fprintf(stderr, "Error %i allocating DPUs\n", status);
+		return -3;
+	}
+
+
 	for (unsigned long entry=0; entry < sizeof(test_table)/sizeof(test_entry); entry++)
 	{
 		dbg_printf("Entry: %lu %s\n", entry, test_table[entry].name);
 		if (strcmp(test_table[entry].name, test_name) == 0)
 		{
-			test_table[entry].fn();
+			test_table[entry].fn(dpus);
 			break;
 		}
 	}
+
+	DPU_ASSERT(dpu_free(dpus));
 	return 0;
 }
