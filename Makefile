@@ -23,10 +23,10 @@ DPU_FLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
 all: ${HOST_BIN} dpu_incr.bin
 
 clean:
-	rm -f ${HOST_BIN}
+	rm -f ${HOST_BIN} dpu_incr.bin
 
 ${HOST_BIN}: ${SRCS}
-	clang -DNR_TASKLETS=$(NR_TASKLETS) -DDPU_BINARY='dpu_incr.bin' -O3 -Wall -Wextra `dpu-pkg-config --libs --cflags dpu` -o $@ $^
+	clang ${HOST_FLAGS} -DDPU_BINARY='dpu_incr.bin' -o $@ $^
 
 dpu_incr.bin: ${DPU_INCR_SRCS}
 	dpu-upmem-dpurte-clang ${DPU_FLAGS} -o $@ ${DPU_INCR_SRCS}

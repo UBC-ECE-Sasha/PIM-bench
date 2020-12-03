@@ -12,7 +12,7 @@
 // WRAM global variables
 __host block_t blocks[NR_TASKLETS];
 __dma_aligned uint8_t caches[NR_TASKLETS][BLOCK_SIZE];
-__host uint32_t results[NR_TASKLETS];
+__host uint32_t results[NR_TASKLETS + 1];
 
 // MRAM variables
 __mram_noinit uint8_t input_buffer[SIZE_PER_DPU];
@@ -34,23 +34,25 @@ int main()
 	for (uint32_t current_block=blocks[tasklet_id].start; current_block < blocks[tasklet_id].end; current_block+=BLOCK_SIZE)
 	{
 		//printf("[%i]: =0x%x \n", tasklet_id, current_block);
-        // load cache with current mram block
-        mram_read(&input_buffer[current_block], block, BLOCK_SIZE);
+		// load cache with current mram block
+		mram_read(&input_buffer[current_block], block, BLOCK_SIZE);
 
-			// increment each word
-			for (unsigned int i=0; i < (BLOCK_SIZE>>2); i++)
-				block[i]++;
+		// increment each word
+		for (unsigned int i=0; i < (BLOCK_SIZE>>2); i++)
+			block[i]++;
 
-			// copy it back
-			mram_write(block, &input_buffer[current_block], BLOCK_SIZE);
+		// copy it back
+		mram_write(block, &input_buffer[current_block], BLOCK_SIZE);
 
-			// record the results
-			results[tasklet_id] += BLOCK_SIZE;
+		// record the results
+		//results[tasklet_id] += (blocks[tasklet_id].end - blocks[tasklet_id].start) + 1;
 	}
 
 	// keep the 32-bit LSB on the 64-bit cycle counter
-	//result->cycles = (uint32_t)perfcounter_get();
+	results[NR_TASKLETS] = (uint32_t)perfcounter_get();
 
+#ifdef DEBUG_DPU
 	printf("[%02d] done %u bytes\n", tasklet_id, results[tasklet_id]);
+#endif // DEBUG_DPU
 	return 0;
 }
